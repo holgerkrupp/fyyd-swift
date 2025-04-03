@@ -82,6 +82,8 @@ class FyydSearchManager{
 
         do {
             let (responseData, _) = try await URLSession.shared.data(from: url)
+
+            
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             decoder.dateDecodingStrategy = .iso8601
