@@ -1,94 +1,81 @@
-//
-//  FyydSearchManager.swift
-//  PodcastClient
-//
-//  Created by Holger Krupp on 06.02.24.
-//
-
 import Foundation
 
-@available(iOS 16.0, *)
-class FyydSearchManager{
-    
-    enum Endpoints{
-        case podcasts, episode, hot
-        
-        var url:URL? {
-            switch self {
-            case .podcasts:
-                return URL(string: "https://api.fyyd.de/0.2/search/podcast")
-            case .episode:
-                return URL(string: "https://api.fyyd.de/0.2/search/episode")
-            case .hot:
-                return URL(string: "https://api.fyyd.de/0.2/feature/podcast/hot")
+@available(iOS 16, *)
+public actor FyydSearchManager {
+    private let baseURL = "https://api.fyyd.de"
+    private var selectedLanguage: String = "en" // Keep language inside the actor
 
-            }
-        }
+    public func setLanguage(_ language: String) {
+        self.selectedLanguage = language
+    }
+
+    public init() {
         
     }
     
-    func getLanguages() async -> [String]?{
+    // MARK: - Public API Methods
     
-        if let requestURL = URL(string: "https://api.fyyd.de/0.2/feature/podcast/hot/languages"){
-            var components = URLComponents()
-            components.scheme = requestURL.scheme
-            components.host = requestURL.host
-            components.path = requestURL.path()
+    /// Fetch hot podcasts
+    public func getHotPodcasts(lang: String? = nil, count: Int = 10) async -> [FyydPodcast]? {
+        let langQuery = lang ?? selectedLanguage ?? "en"
+        print(langQuery)
+        return await fetchPodcasts(from: "/0.2/feature/podcast/hot", params: ["count": "\(count)", "language": langQuery])
+    }
+
+    /// Search podcasts
+    public func searchPodcasts(query: String, count: Int = 10) async -> [FyydPodcast]? {
     
-            var request = URLRequest(url: components.url ?? requestURL)
-            
-            let session = URLSession.shared
-            
-            do {
-                let (responseData, _) = try await session.data(for: request)
-                
-                
-                guard let json = try JSONSerialization.jsonObject(with: responseData , options: []) as? [String: Any] else {
-                    // appropriate error handling
-                    return nil
-                }
-                
-                
-                if let lanuages = json["data"] as? [String]{
-                    return lanuages
-                }
-            }catch{
-                print(error)
-                
-            }
-        }
-        return nil
-        
+        return await fetchPodcasts(from: "/0.2/search/podcast", params: ["title": query, "count": "\(count)"])
     }
     
-    func search(for term: String, endpoint: Endpoints = .podcasts, lang: String? = nil, count: Int? = 10) async -> [Podcast]? {
-        guard !term.isEmpty, let requestURL = endpoint.url else { return nil }
+    /// Fetch podcast details by ID
+    public func getPodcastDetails(id: Int) async -> FyydPodcast? {
+        return await fetchSinglePodcast(from: "/0.2/podcast", params: ["podcast_id": "\(id)"])
+    }
+    
+    /// Fetch recent episodes
+    public func getRecentEpisodes(count: Int = 10) async -> [FyydEpisode]? {
+        return await fetchEpisodes(from: "/0.2/feature/episode/recent", params: ["count": "\(count)"])
+    }
 
-        var components = URLComponents()
-        components.scheme = requestURL.scheme
-        components.host = requestURL.host
-        components.path = requestURL.path()
-        components.queryItems = [URLQueryItem(name: "title", value: term)]
+    /// Fetch podcast recommendations
+    public func getPodcastRecommendations(count: Int = 10) async -> [FyydPodcast]? {
+        return await fetchPodcasts(from: "/0.2/feature/podcast/recommendation", params: ["count": "\(count)"])
+    }
+    
+    /// Fetch podcast categories
+    public func getCategories() async -> [FyydCategory]? {
+        return await fetchCategories(from: "/0.2/category/list")
+    }
 
-        if let lang = lang {
-            components.queryItems?.append(URLQueryItem(name: "language", value: lang))
-        }
+    /// Fetch podcasts by category ID
+    public func getPodcastsByCategory(id: Int, count: Int = 10) async -> [FyydPodcast]? {
+        return await fetchPodcasts(from: "/0.2/category", params: ["category_id": "\(id)", "count": "\(count)"])
+    }
+    
+    /// Fetch discoverable podcasts
+    public func getDiscoverPodcasts(count: Int = 10) async -> [FyydPodcast]? {
+        return await fetchPodcasts(from: "/0.2/discover/podlist", params: ["count": "\(count)"])
+    }
+
+    /// Fetch available languages
+    public func getLanguages() async -> [String]? {
+        return await fetchLanguages(from: "/0.2/feature/podcast/hot/languages")
+    }
+    
+    // MARK: - Private Helper Methods
+    
+    /// Generic function to fetch a list of podcasts
+
+private func fetchPodcasts(from endpoint: String, params: [String: String] = [:]) async -> [FyydPodcast]? {
+        guard let url = buildURL(endpoint: endpoint, params: params) else { return nil }
         
-        if let count = count {
-            components.queryItems?.append(URLQueryItem(name: "count", value: "\(count)"))
-        }
-
-        guard let url = components.url else { return nil }
-
         do {
-            let (responseData, _) = try await URLSession.shared.data(from: url)
-
-            
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            decoder.dateDecodingStrategy = .iso8601
-            
-            let response = try decoder.decode(PodcastAPIResponse.self, from: responseData)
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let jsonString = String(data: data, encoding: .utf8) {
+                 print("Received JSON: \(jsonString)")
+             }
+            let response = try JSONDecoder().decode(FyydPodcastResponse.self, from: data)
             return response.data
         } catch {
             print("Error fetching podcasts: \(error)")
@@ -96,100 +83,112 @@ class FyydSearchManager{
         }
     }
 
+    /// Fetch details for a single podcast
+    private func fetchSinglePodcast(from endpoint: String, params: [String: String] = [:]) async -> FyydPodcast? {
+        guard let url = buildURL(endpoint: endpoint, params: params) else { return nil }
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let response = try JSONDecoder().decode(FyydPodcastResponse.self, from: data)
+            return response.data.first
+        } catch {
+            print("Error fetching podcast details: \(error)")
+            return nil
+        }
+    }
     
+    /// Fetch a list of episodes
+    private func fetchEpisodes(from endpoint: String, params: [String: String] = [:]) async -> [FyydEpisode]? {
+        guard let url = buildURL(endpoint: endpoint, params: params) else { return nil }
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let response = try JSONDecoder().decode(FyydEpisodeResponse.self, from: data)
+            return response.data
+        } catch {
+            print("Error fetching episodes: \(error)")
+            return nil
+        }
+    }
+
+    /// Fetch podcast categories
+    private func fetchCategories(from endpoint: String) async -> [FyydCategory]? {
+        guard let url = buildURL(endpoint: endpoint) else { return nil }
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let response = try JSONDecoder().decode(FyydCategoryResponse.self, from: data)
+            return response.data
+        } catch {
+            print("Error fetching categories: \(error)")
+            return nil
+        }
+    }
+
+    /// Fetch list of supported languages
+    private func fetchLanguages(from endpoint: String) async -> [String]? {
+        guard let url = buildURL(endpoint: endpoint) else { return nil }
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let response = try JSONDecoder().decode(FyydLanguagesResponse.self, from: data)
+            return response.data
+        } catch {
+            print("Error fetching languages: \(error)")
+            return nil
+        }
+    }
     
+    /// Construct a URL with query parameters
+    private func buildURL(endpoint: String, params: [String: String] = [:]) -> URL? {
+        var components = URLComponents(string: "\(baseURL)\(endpoint)")
+        
+        components?.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
+        print(components?.debugDescription ?? "No URL components")
+        return components?.url
+    }
 }
-struct PodcastAPIResponse: Codable {
+
+// MARK: - Data Models
+
+public struct FyydPodcastResponse: Decodable, Sendable {
     let status: Int
-    let msg: String
-    let meta: Meta
-    let data: [Podcast]
+    let data: [FyydPodcast]
 }
 
-struct Meta: Codable {
-    let paging: Paging
-    let apiInfo: APIInfo
-    
-    enum CodingKeys: String, CodingKey {
-        case paging
-        case apiInfo = "API_INFO"
-    }
-}
-
-struct Paging: Codable {
-    let count, page, firstPage, lastPage: Int
-    let nextPage: Int?
-    let prevPage: Int?
-    
-    enum CodingKeys: String, CodingKey {
-        case count, page
-        case firstPage = "first_page"
-        case lastPage = "last_page"
-        case nextPage = "next_page"
-        case prevPage = "prev_page"
-    }
-}
-
-struct APIInfo: Codable {
-    let apiVersion: Double
-    
-    enum CodingKeys: String, CodingKey {
-        case apiVersion = "API_VERSION"
-    }
-}
-
-
-struct Podcast: Codable {
-    let title: String
-    let id: Int
-    let xmlURL, htmlURL, imgURL: String
+public struct FyydEpisodeResponse: Decodable, Sendable {
     let status: Int
-    let slug: String
-    let layoutImageURL, thumbImageURL, microImageURL: String
-    let language: String
-    let lastPoll: String
-    let generator: String
-    let categories: [Int]
-    let lastPub: String
-    let rank: Int
-    let urlFyyd: String
-    let description: String
-    let subtitle: String
-    let episodes: [Episode]
-    
-    enum CodingKeys: String, CodingKey {
-        case title, id, status, slug, language, generator, categories, rank, episodes
-        case xmlURL = "xmlURL"
-        case htmlURL = "htmlURL"
-        case imgURL = "imgURL"
-        case layoutImageURL = "layoutImageURL"
-        case thumbImageURL = "thumbImageURL"
-        case microImageURL = "microImageURL"
-        case lastPoll = "lastpoll"
-        case lastPub = "lastpub"
-        case urlFyyd = "url_fyyd"
-        case description, subtitle
-    }
+    let data: [FyydEpisode]
 }
 
-struct Episode: Codable {
-    let title: String
+public struct FyydCategoryResponse: Decodable, Sendable {
+    let status: Int
+    let data: [FyydCategory]
+}
+
+public struct FyydLanguagesResponse: Decodable, Sendable {
+    let status: Int
+    let data: [String]
+}
+
+// MARK: - Example Model Definitions
+
+public struct FyydPodcast: Decodable, Sendable {
+    public let id: Int
+    public let title: String
+    public let description: String?
+    public let imageUrl: String?
+}
+
+public struct FyydEpisode: Decodable, Sendable {
+    public let id: Int
+    public let title: String
+    public let podcastId: Int
+    public let audioUrl: String
+    public let duration: Int?
+}
+
+public struct FyydCategory: Decodable, Sendable {
     let id: Int
-    let guid: String
-    let url: String
-    let enclosure: String
-    let podcastID: Int
-    let imgURL: String
-    let pubDate: String
-    let duration: Int
-    let urlFyyd: String
-    let description: String
-    
-    enum CodingKeys: String, CodingKey {
-        case title, id, guid, url, enclosure, duration, description
-        case podcastID = "podcast_id"
-        case imgURL = "imgURL"
-        case pubDate = "pubdate"
-        case urlFyyd = "url_fyyd"
-    }
+    let title: String
 }

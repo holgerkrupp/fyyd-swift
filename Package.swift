@@ -4,21 +4,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "FyydSearchManager",
+    name: "ffyd_swift",
     platforms: [
         .iOS(.v18)
     ],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
-            name: "FyydSearchManager",
-            targets: ["FyydSearchManager"]),
+            name: "ffyd_swift",
+            targets: ["ffyd_swift"]),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "FyydSearchManager"),
+            name: "ffyd_swift"),
 
     ]
 )
