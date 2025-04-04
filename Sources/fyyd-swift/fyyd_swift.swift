@@ -18,7 +18,7 @@ public actor FyydSearchManager {
     /// Fetch hot podcasts
     public func getHotPodcasts(lang: String? = nil, count: Int = 10) async -> [FyydPodcast]? {
         let langQuery = lang ?? selectedLanguage ?? "en"
-        print(langQuery)
+
         return await fetchPodcasts(from: "/0.2/feature/podcast/hot", params: ["count": "\(count)", "language": langQuery])
     }
 
@@ -72,9 +72,7 @@ private func fetchPodcasts(from endpoint: String, params: [String: String] = [:]
         
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            if let jsonString = String(data: data, encoding: .utf8) {
-                 print("Received JSON: \(jsonString)")
-             }
+   
             let response = try JSONDecoder().decode(FyydPodcastResponse.self, from: data)
             return response.data
         } catch {
@@ -131,6 +129,7 @@ private func fetchPodcasts(from endpoint: String, params: [String: String] = [:]
         
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
+           
             let response = try JSONDecoder().decode(FyydLanguagesResponse.self, from: data)
             return response.data
         } catch {
@@ -144,7 +143,6 @@ private func fetchPodcasts(from endpoint: String, params: [String: String] = [:]
         var components = URLComponents(string: "\(baseURL)\(endpoint)")
         
         components?.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
-        print(components?.debugDescription ?? "No URL components")
         return components?.url
     }
 }
@@ -176,8 +174,12 @@ public struct FyydLanguagesResponse: Decodable, Sendable {
 public struct FyydPodcast: Decodable, Sendable {
     public let id: Int
     public let title: String
+    public let subtitle: String
+    public let author: String?
+    public let lastpub: String
     public let description: String?
-    public let imageUrl: String?
+    public let imgURL: String?
+    public let xmlURL: String?
 }
 
 public struct FyydEpisode: Decodable, Sendable {
