@@ -4,13 +4,30 @@ import Foundation
 public actor FyydSearchManager {
     private let baseURL = "https://api.fyyd.de"
     private var selectedLanguage: String = "en" // Keep language inside the actor
-
+    
+    // Optional OAuth2 configuration
+    private var accessToken: String?
+    private var refreshToken: String?
+    private var tokenExpirationDate: Date?
+    private var clientId: String?
+    private var clientSecret: String?
+    private var redirectURI: String?
+    private let authEndpoint = "https://fyyd.de/oauth/authorize"
+    private let tokenEndpoint = "https://fyyd.de/oauth/token"
+    
+    // Default initializer for unauthenticated access
+    public init() {
+    }
+    
+    // Initializer for authenticated access
+    public init(clientId: String, clientSecret: String, redirectURI: String) {
+        self.clientId = clientId
+        self.clientSecret = clientSecret
+        self.redirectURI = redirectURI
+    }
+    
     public func setLanguage(_ language: String) {
         self.selectedLanguage = language
-    }
-
-    public init() {
-        
     }
     
     // MARK: - Public API Methods
@@ -63,16 +80,127 @@ public actor FyydSearchManager {
         return await fetchLanguages(from: "/0.2/feature/podcast/hot/languages")
     }
     
+    // MARK: - OAuth2 Methods
+    
+    /// Get the authorization URL for OAuth2 flow
+    public func getAuthorizationURL() -> URL? {
+        guard let clientId = clientId, let redirectURI = redirectURI else {
+            return nil
+        }
+        
+        var components = URLComponents(string: authEndpoint)
+        components?.queryItems = [
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "scope", value: "read write")
+        ]
+        return components?.url
+    }
+    
+    /// Exchange authorization code for access token
+    public func exchangeCodeForToken(code: String) async throws {
+        guard let clientId = clientId,
+              let clientSecret = clientSecret,
+              let redirectURI = redirectURI else {
+            throw FyydError.notConfigured
+        }
+        
+        guard let url = URL(string: tokenEndpoint) else {
+            throw FyydError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let parameters = [
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": clientId,
+            "client_secret": clientSecret,
+            "redirect_uri": redirectURI
+        ]
+        
+        request.httpBody = parameters
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        
+        self.accessToken = tokenResponse.accessToken
+        self.refreshToken = tokenResponse.refreshToken
+        self.tokenExpirationDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expiresIn))
+    }
+    
+    /// Refresh the access token using the refresh token
+    private func refreshAccessToken() async throws {
+        guard let refreshToken = refreshToken,
+              let clientId = clientId,
+              let clientSecret = clientSecret else {
+            throw FyydError.noRefreshToken
+        }
+        
+        guard let url = URL(string: tokenEndpoint) else {
+            throw FyydError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        
+        let parameters = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": clientId,
+            "client_secret": clientSecret
+        ]
+        
+        request.httpBody = parameters
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        
+        self.accessToken = tokenResponse.accessToken
+        self.refreshToken = tokenResponse.refreshToken
+        self.tokenExpirationDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expiresIn))
+    }
+    
+    /// Check if the current token is valid and refresh if necessary
+    private func ensureValidToken() async throws {
+        // If not configured for OAuth2, skip token validation
+        guard clientId != nil else { return }
+        
+        guard let expirationDate = tokenExpirationDate else {
+            throw FyydError.notAuthenticated
+        }
+        
+        if Date() >= expirationDate {
+            try await refreshAccessToken()
+        }
+    }
+    
     // MARK: - Private Helper Methods
     
     /// Generic function to fetch a list of podcasts
-
-private func fetchPodcasts(from endpoint: String, params: [String: String] = [:]) async -> [FyydPodcast]? {
+    private func fetchPodcasts(from endpoint: String, params: [String: String] = [:]) async -> [FyydPodcast]? {
         guard let url = buildURL(endpoint: endpoint, params: params) else { return nil }
         
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-   
+            try await ensureValidToken()
+            var request = URLRequest(url: url)
+            
+            // Only add authorization header if we have a token
+            if let accessToken = accessToken {
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            }
+            
+            let (data, _) = try await URLSession.shared.data(for: request)
             let response = try JSONDecoder().decode(FyydPodcastResponse.self, from: data)
             return response.data
         } catch {
@@ -193,4 +321,30 @@ public struct FyydEpisode: Decodable, Sendable {
 public struct FyydCategory: Decodable, Sendable {
     let id: Int
     let title: String
+}
+
+// MARK: - Error Types
+
+public enum FyydError: Error {
+    case invalidURL
+    case notAuthenticated
+    case noRefreshToken
+    case invalidResponse
+    case notConfigured
+}
+
+// MARK: - OAuth2 Response Models
+
+private struct TokenResponse: Decodable {
+    let accessToken: String
+    let refreshToken: String
+    let expiresIn: Int
+    let tokenType: String
+    
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
+        case tokenType = "token_type"
+    }
 }
