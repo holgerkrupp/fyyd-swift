@@ -185,6 +185,18 @@ public actor FyydSearchManager {
         }
     }
     
+    /// Handle the OAuth2 redirect URL and extract the authorization code
+    /// - Parameter url: The URL received from the OAuth2 redirect
+    /// - Throws: FyydError.invalidResponse if the URL doesn't contain a valid authorization code
+    public func handleRedirect(url: URL) async throws {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+            throw FyydError.invalidResponse
+        }
+        
+        try await exchangeCodeForToken(code: code)
+    }
+    
     // MARK: - Private Helper Methods
     
     /// Generic function to fetch a list of podcasts
