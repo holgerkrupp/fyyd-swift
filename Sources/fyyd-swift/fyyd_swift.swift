@@ -30,19 +30,36 @@ public actor FyydSearchManager {
         self.selectedLanguage = language
     }
     
+    // MARK: - Private Helper Struct for category podcasts
+    
+    private struct _FyydCategoryPodcastsResponse: Decodable {
+        let status: Int
+        let msg: String?
+        let meta: FyydMetaInfo?
+        let data: _Data
+        struct _Data: Decodable {
+            let podcasts: [FyydPodcast]
+        }
+    }
+    
+    public struct FyydPodcastListWithPaging: Sendable {
+        public let podcasts: [FyydPodcast]
+        public let paging: PagingInfo?
+    }
+    
     // MARK: - Public API Methods
     
     /// Fetch hot podcasts
     public func getHotPodcasts(lang: String? = nil, count: Int = 10) async -> [FyydPodcast]? {
         let langQuery = lang ?? selectedLanguage ?? "en"
 
-        return await fetchPodcasts(from: "/0.2/feature/podcast/hot", params: ["count": "\(count)", "language": langQuery])
+        return await fetchPodcasts(from: "/0.2/feature/podcast/hot", params: ["count": "\(count)", "language": langQuery])?.podcasts
     }
 
     /// Search podcasts
     public func searchPodcasts(query: String, count: Int = 10) async -> [FyydPodcast]? {
     
-        return await fetchPodcasts(from: "/0.2/search/podcast", params: ["title": query, "count": "\(count)"])
+        return await fetchPodcasts(from: "/0.2/search/podcast", params: ["title": query, "count": "\(count)"])?.podcasts
     }
     
     /// Fetch podcast details by ID
@@ -57,22 +74,27 @@ public actor FyydSearchManager {
 
     /// Fetch podcast recommendations
     public func getPodcastRecommendations(count: Int = 10) async -> [FyydPodcast]? {
-        return await fetchPodcasts(from: "/0.2/feature/podcast/recommendation", params: ["count": "\(count)"])
+        return await fetchPodcasts(from: "/0.2/feature/podcast/recommend", params: ["count": "\(count)"])?.podcasts
     }
     
     /// Fetch podcast categories
     public func getCategories() async -> [FyydCategory]? {
-        return await fetchCategories(from: "/0.2/category/list")
+        return await fetchCategories(from: "/0.2/categories")
     }
 
     /// Fetch podcasts by category ID
-    public func getPodcastsByCategory(id: Int, count: Int = 10) async -> [FyydPodcast]? {
-        return await fetchPodcasts(from: "/0.2/category", params: ["category_id": "\(id)", "count": "\(count)"])
+    /// - Parameters:
+    ///   - id: Category ID
+    ///   - count: Number of podcasts to fetch
+    ///   - page: Page number for pagination
+    /// - Returns: Podcasts with paging information
+    public func getPodcastsByCategory(id: Int, count: Int = 10, page: Int? = nil) async -> FyydPodcastListWithPaging? {
+        return await fetchPodcasts(from: "/0.2/category", params: ["category_id": "\(id)", "count": "\(count)"], page: page)
     }
     
     /// Fetch discoverable podcasts
     public func getDiscoverPodcasts(count: Int = 10) async -> [FyydPodcast]? {
-        return await fetchPodcasts(from: "/0.2/discover/podlist", params: ["count": "\(count)"])
+        return await fetchPodcasts(from: "/0.2/discover/podlist", params: ["count": "\(count)"])?.podcasts
     }
 
     /// Fetch available languages
@@ -199,10 +221,13 @@ public actor FyydSearchManager {
     
     // MARK: - Private Helper Methods
     
-    /// Generic function to fetch a list of podcasts
-    private func fetchPodcasts(from endpoint: String, params: [String: String] = [:]) async -> [FyydPodcast]? {
-        guard let url = buildURL(endpoint: endpoint, params: params) else { return nil }
-        
+    /// Generic function to fetch a list of podcasts with optional paging
+    private func fetchPodcasts(from endpoint: String, params: [String: String] = [:], page: Int? = nil) async -> FyydPodcastListWithPaging? {
+        var allParams = params
+        if let page = page {
+            allParams["page"] = "\(page)"
+        }
+        guard let url = buildURL(endpoint: endpoint, params: allParams) else { return nil }
         do {
             try await ensureValidToken()
             var request = URLRequest(url: url)
@@ -213,8 +238,14 @@ public actor FyydSearchManager {
             }
             
             let (data, _) = try await URLSession.shared.data(for: request)
-            let response = try JSONDecoder().decode(FyydPodcastResponse.self, from: data)
-            return response.data
+            if endpoint == "/0.2/category" {
+                let response = try JSONDecoder().decode(_FyydCategoryPodcastsResponse.self, from: data)
+                let paging = response.meta?.paging
+                return FyydPodcastListWithPaging(podcasts: response.data.podcasts, paging: paging)
+            } else {
+                let response = try JSONDecoder().decode(FyydPodcastResponse.self, from: data)
+                return FyydPodcastListWithPaging(podcasts: response.data, paging: nil)
+            }
         } catch {
             print("Error fetching podcasts: \(error)")
             return nil
@@ -301,7 +332,27 @@ public struct FyydEpisodeResponse: Decodable, Sendable {
 
 public struct FyydCategoryResponse: Decodable, Sendable {
     let status: Int
+    let msg: String?
+    let meta: FyydMetaInfo?
     let data: [FyydCategory]
+}
+
+struct FyydMetaInfo: Decodable, Sendable {
+    let API_INFO: FyydAPIInfo?
+    let paging: PagingInfo?
+}
+
+struct FyydAPIInfo: Decodable, Sendable {
+    let API_VERSION: String?
+}
+
+public struct PagingInfo: Decodable, Sendable {
+    public let count: Int?
+    public let page: Int?
+    public let first_page: Int?
+    public let last_page: Int?
+    public let next_page: Int?
+    public let prev_page: Int?
 }
 
 public struct FyydLanguagesResponse: Decodable, Sendable {
@@ -311,9 +362,9 @@ public struct FyydLanguagesResponse: Decodable, Sendable {
 
 // MARK: - Example Model Definitions
 
-public struct FyydPodcast: Decodable, Sendable {
+public struct FyydPodcast: Decodable, Sendable, Equatable {
     public let id: Int
-    public let title: String
+    public let title: String?
     public let subtitle: String
     public let author: String?
     public let lastpub: String
@@ -330,9 +381,12 @@ public struct FyydEpisode: Decodable, Sendable {
     public let duration: Int?
 }
 
-public struct FyydCategory: Decodable, Sendable {
-    let id: Int
-    let title: String
+public struct FyydCategory: Decodable, Sendable, Hashable {
+    public let id: Int
+    public let slug: String
+    public let name: String
+    public let name_de: String?
+    public let subcategories: [FyydCategory]?
 }
 
 // MARK: - Error Types
