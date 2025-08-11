@@ -27,6 +27,7 @@ public actor FyydSearchManager {
     }
     
     public func setLanguage(_ language: String) {
+        print("set language to \(language)")
         self.selectedLanguage = language
     }
     
@@ -57,7 +58,7 @@ public actor FyydSearchManager {
     }
 
     /// Search podcasts
-    public func searchPodcasts(query: String, count: Int = 10) async -> [FyydPodcast]? {
+    public func searchPodcasts(query: String, count: Int = 100) async -> [FyydPodcast]? {
     
         return await fetchPodcasts(from: "/0.2/search/podcast", params: ["title": query, "count": "\(count)"])?.podcasts
     }
